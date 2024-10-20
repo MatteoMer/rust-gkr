@@ -1,15 +1,12 @@
 use crate::gkr::circuit::Circuit;
 use ark_ff::Field;
 
-pub struct Prover<F: Field> {
-    circuit: Circuit<F>,
+pub struct Prover<'a, F: Field> {
+    circuit: &'a Circuit<F>,
 }
 
-impl<F: Field> Prover<F> {
-    // TODO: change for taking a circuit as input
-    pub fn new(circuit: &Circuit<F>) -> Self {
-        Self {
-            circuit: circuit.clone(),
-        }
+impl<'a, F: Field> Prover<'a, F> {
+    pub fn new(circuit: &'a Circuit<F>) -> Self {
+        Self { circuit }
     }
 }
