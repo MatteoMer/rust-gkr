@@ -3,7 +3,7 @@ use std::fmt;
 use ark_ff::Field;
 use ark_poly::DenseMultilinearExtension;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum GateType {
     Add,
     Mult,
@@ -19,7 +19,7 @@ impl fmt::Display for GateType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Gate<F: Field> {
     inputs: [F; 2],
     output: F,
@@ -87,6 +87,9 @@ impl<F: Field> Circuit<F> {
             cur_inputs = new_inputs;
         }
 
+        // Reverse so the ouput layer is at index 0
+        layers.reverse();
+
         Self {
             layers: layers.clone(),
             d: layers.len(),
@@ -98,26 +101,149 @@ impl<F: Field> Circuit<F> {
     }
 
     fn add_i(&self, i: usize, a: usize, b: usize, c: usize) -> bool {
-        self.layers[i].gates[a].gate_type == GateType::Add
-            && self.layers[i].gates[a].inputs[0] == self.layers[i + 1].gates[b].output
-            && self.layers[i].gates[a].inputs[0] == self.layers[i + 1].gates[c].output
+        // Return 1 if and only if:
+        // 1. Gate 'a' in layer i is an addition gate
+        // 2. Gate 'b' in layer i+1 is the first input to gate 'a'
+        // 3. Gate 'c' in layer i+1 is the second input to gate 'a'
+        if a >= self.layers[i].gates.len()
+            || b >= self.layers[i + 1].gates.len()
+            || c >= self.layers[i + 1].gates.len()
+        {
+            return false;
+        }
+
+        let gate_a = &self.layers[i].gates[a];
+        let gate_b = &self.layers[i + 1].gates[b];
+        let gate_c = &self.layers[i + 1].gates[c];
+
+        // Check if:
+        // 1. Gate a is an addition gate
+        // 2. First input of gate a matches the output of gate b
+        // 3. Second input of gate a matches the output of gate c
+        gate_a.gate_type == GateType::Add
+            && gate_a.inputs[0] == gate_b.output
+            && gate_a.inputs[1] == gate_c.output
     }
 
     fn mult_i(&self, i: usize, a: usize, b: usize, c: usize) -> bool {
-        self.layers[i].gates[a].gate_type == GateType::Mult
-            && self.layers[i].gates[a].inputs[0] == self.layers[i + 1].gates[b].output
-            && self.layers[i].gates[a].inputs[0] == self.layers[i + 1].gates[c].output
+        // Similar to add_i but for multiplication gates
+        if a >= self.layers[i].gates.len()
+            || b >= self.layers[i + 1].gates.len()
+            || c >= self.layers[i + 1].gates.len()
+        {
+            return false;
+        }
+
+        let gate_a = &self.layers[i].gates[a];
+        let gate_b = &self.layers[i + 1].gates[b];
+        let gate_c = &self.layers[i + 1].gates[c];
+
+        gate_a.gate_type == GateType::Mult
+            && gate_a.inputs[0] == gate_b.output
+            && gate_a.inputs[1] == gate_c.output
+    }
+
+    fn extract_index(value: usize, start_bit: usize, num_bits: usize) -> usize {
+        if num_bits == 0 {
+            return 0;
+        }
+        (value >> start_bit) & ((1 << num_bits) - 1)
     }
 
     // eval add_i MLE at r_i point
     // to create the MLE we need to encode wiring predicates and put them to 1
     // while all other points should be 0 in the domain.
-    pub fn add_i_mle(&self, i: usize) -> DenseMultilinearExtension<F> {
-        let mut evals: Vec<F> = vec![];
-        for gate in 0..2_usize.pow(self.layers[i].k as u32) {
-            for gate_next in 0..2usize.pow(self.layers[i + 1].k as u32) {}
+    pub fn add_i_mle(&self, layer_i: usize) -> DenseMultilinearExtension<F> {
+        let current_layer = &self.layers[layer_i];
+        let next_layer = &self.layers[layer_i + 1];
+
+        // Calculate the number of variables needed for each layer
+        let current_layer_bits = if current_layer.gates.len() > 1 {
+            ark_std::log2(current_layer.gates.len().next_power_of_two()) as usize
+        } else {
+            1
+        };
+
+        let next_layer_bits = if next_layer.gates.len() > 1 {
+            ark_std::log2(next_layer.gates.len().next_power_of_two()) as usize
+        } else {
+            1
+        };
+
+        let num_variables = current_layer_bits + 2 * next_layer_bits;
+
+        // Create evaluations for all possible combinations
+        let num_points = 1 << num_variables;
+        let mut evaluations = Vec::with_capacity(num_points);
+
+        println!("Layer {} MLE construction:", layer_i);
+        println!("Current layer bits: {}", current_layer_bits);
+        println!("Next layer bits: {}", next_layer_bits);
+        println!("Total variables: {}", num_variables);
+        println!("Number of points: {}", num_points);
+
+        for i in 0..num_points {
+            // Extract gate indices from the binary representation
+            let a = Self::extract_index(i, 0, current_layer_bits);
+            let b = Self::extract_index(i, current_layer_bits, next_layer_bits);
+            let c = Self::extract_index(i, current_layer_bits + next_layer_bits, next_layer_bits);
+
+            let is_valid = self.add_i(layer_i, a, b, c);
+
+            if is_valid {
+                println!("Valid wiring found: gate {} in layer {} connected to gates {} and {} in layer {}", 
+                    a, layer_i, b, c, layer_i + 1);
+            }
+
+            evaluations.push(if is_valid { F::one() } else { F::zero() });
         }
 
-        todo!()
+        DenseMultilinearExtension::from_evaluations_vec(num_variables, evaluations)
+    }
+
+    // Similar to add_i_mle
+    pub fn mult_i_mle(&self, layer_i: usize) -> DenseMultilinearExtension<F> {
+        let current_layer = &self.layers[layer_i];
+        let next_layer = &self.layers[layer_i + 1];
+
+        let current_layer_bits = if current_layer.gates.len() > 1 {
+            ark_std::log2(current_layer.gates.len().next_power_of_two()) as usize
+        } else {
+            1
+        };
+
+        let next_layer_bits = if next_layer.gates.len() > 1 {
+            ark_std::log2(next_layer.gates.len().next_power_of_two()) as usize
+        } else {
+            1
+        };
+
+        let num_variables = current_layer_bits + 2 * next_layer_bits;
+
+        let num_points = 1 << num_variables;
+        let mut evaluations = Vec::with_capacity(num_points);
+
+        println!("Layer {} MLE construction:", layer_i);
+        println!("Current layer bits: {}", current_layer_bits);
+        println!("Next layer bits: {}", next_layer_bits);
+        println!("Total variables: {}", num_variables);
+        println!("Number of points: {}", num_points);
+
+        for i in 0..num_points {
+            let a = Self::extract_index(i, 0, current_layer_bits);
+            let b = Self::extract_index(i, current_layer_bits, next_layer_bits);
+            let c = Self::extract_index(i, current_layer_bits + next_layer_bits, next_layer_bits);
+
+            let is_valid = self.mult_i(layer_i, a, b, c);
+
+            if is_valid {
+                println!("Valid wiring found: gate {} in layer {} connected to gates {} and {} in layer {}", 
+                    a, layer_i, b, c, layer_i + 1);
+            }
+
+            evaluations.push(if is_valid { F::one() } else { F::zero() });
+        }
+
+        DenseMultilinearExtension::from_evaluations_vec(num_variables, evaluations)
     }
 }

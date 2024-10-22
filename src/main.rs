@@ -44,9 +44,23 @@ fn main() {
 
     println!("[gkr] starting interactive gkr protocol");
     // todo create circuit and then call prover
-    let circuit_layer = vec![vec![GateType::Add, GateType::Add], vec![GateType::Mult]];
-    let inputs = [Fq::from(10), Fq::from(1), Fq::from(2), Fq::from(3)];
+    let circuit_layer = vec![
+        vec![GateType::Add, GateType::Add, GateType::Add, GateType::Add], // First layer (after inputs)
+        vec![GateType::Add, GateType::Add],                               // Second layer
+        vec![GateType::Add],                                              // Top layer
+    ];
+    let inputs = [
+        Fq::from(10),
+        Fq::from(1),
+        Fq::from(2),
+        Fq::from(3),
+        Fq::from(11),
+        Fq::from(4),
+        Fq::from(5),
+        Fq::from(7),
+    ];
     let circuit: Circuit<Fq> = Circuit::new(circuit_layer, &inputs);
     println!("{}", circuit);
+    circuit.add_i_mle(1);
     let p: GKRProver<Fq> = GKRProver::new(&circuit);
 }

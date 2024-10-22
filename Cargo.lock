@@ -368,6 +368,7 @@ dependencies = [
  "ark-bls12-381",
  "ark-ff",
  "ark-poly",
+ "ark-std",
  "merlin",
  "ran",
  "rand",
